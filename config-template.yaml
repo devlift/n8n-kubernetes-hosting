@@ -1,0 +1,160 @@
+# n8n Kubernetes Configuration Template
+# Copy this file and customize it for your environment
+
+# 1. Update n8n-secret.yaml with your webhook URL
+# Replace the placeholder values with your actual configuration
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: n8n-secret
+  namespace: n8n
+type: Opaque
+data:
+  # Base64 encoded webhook URL
+  # Example: echo -n "https://your-domain.com" | base64
+  WEBHOOK_URL: <BASE64_ENCODED_WEBHOOK_URL>
+
+---
+# 2. Update postgres-secret.yaml with secure passwords
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: n8n
+type: Opaque
+data:
+  # Base64 encoded passwords (generate secure passwords!)
+  # Example: echo -n "your-secure-password" | base64
+  POSTGRES_PASSWORD: <BASE64_ENCODED_POSTGRES_PASSWORD>
+  POSTGRES_NON_ROOT_USER: <BASE64_ENCODED_USER>
+  POSTGRES_NON_ROOT_PASSWORD: <BASE64_ENCODED_USER_PASSWORD>
+
+---
+# 3. Customize n8n-deployment.yaml resource limits
+# Adjust these based on your cluster capacity and n8n usage
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: n8n
+  namespace: n8n
+spec:
+  template:
+    spec:
+      containers:
+      - name: n8n
+        resources:
+          requests:
+            memory: "250Mi"    # Minimum memory required
+            cpu: "100m"        # Minimum CPU required
+          limits:
+            memory: "1280Mi"   # Maximum memory allowed
+            cpu: "1000m"       # Maximum CPU allowed (1 core)
+        env:
+        # Add custom environment variables here
+        - name: N8N_HOST
+          value: "0.0.0.0"
+        - name: N8N_PORT
+          value: "5678"
+        - name: N8N_PROTOCOL
+          value: "http"
+        # Uncomment and customize these for production
+        # - name: N8N_ENCRYPTION_KEY
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: n8n-secret
+        #       key: ENCRYPTION_KEY
+        # - name: N8N_USER_MANAGEMENT_DISABLED
+        #   value: "false"
+        # - name: N8N_BASIC_AUTH_ACTIVE
+        #   value: "true"
+        # - name: N8N_BASIC_AUTH_USER
+        #   value: "admin"
+        # - name: N8N_BASIC_AUTH_PASSWORD
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: n8n-secret
+        #       key: BASIC_AUTH_PASSWORD
+
+---
+# 4. Customize PostgreSQL resource limits
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: n8n
+spec:
+  template:
+    spec:
+      containers:
+      - name: postgres
+        resources:
+          requests:
+            memory: "256Mi"    # Minimum memory for PostgreSQL
+            cpu: "100m"        # Minimum CPU for PostgreSQL
+          limits:
+            memory: "512Mi"    # Maximum memory for PostgreSQL
+            cpu: "500m"        # Maximum CPU for PostgreSQL
+
+---
+# 5. Customize ingress configuration for your domain
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: n8n-ingress
+  namespace: n8n
+  annotations:
+    kubernetes.io/ingress.class: "gce"  # Change for your cloud provider
+    # For AWS: kubernetes.io/ingress.class: "alb"
+    # For Azure: kubernetes.io/ingress.class: "azure/application-gateway"
+    # For nginx: kubernetes.io/ingress.class: "nginx"
+spec:
+  rules:
+  - host: your-domain.com  # Replace with your actual domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: n8n
+            port:
+              number: 5678
+
+---
+# 6. SSL Certificate configuration
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: n8n-cert
+  namespace: n8n
+spec:
+  secretName: n8n-tls
+  issuerRef:
+    name: letsencrypt-prod  # Change to your certificate issuer
+    kind: ClusterIssuer
+  dnsNames:
+  - your-domain.com  # Replace with your actual domain
+
+---
+# 7. Backup schedule customization
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: n8n
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM - customize as needed
+  # Other schedule examples:
+  # "0 */6 * * *" - Every 6 hours
+  # "0 2 * * 0" - Weekly on Sunday at 2 AM
+  # "0 2 1 * *" - Monthly on the 1st at 2 AM
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            env:
+            - name: BACKUP_RETENTION_DAYS
+              value: "7"  # Keep backups for 7 days - adjust as needed 

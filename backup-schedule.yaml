@@ -1,0 +1,95 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-script
+  namespace: n8n
+data:
+  backup.sh: |
+    #!/bin/bash
+    # PostgreSQL Backup Script
+    set -e
+    
+    # Database connection details
+    PGHOST="postgres-service"
+    PGPORT="5432"
+    PGDATABASE="n8n"
+    BACKUP_DIR="/backup"
+    DATE=$(date +%Y%m%d_%H%M%S)
+    BACKUP_FILE="n8n_backup_${DATE}.sql"
+    
+    echo "Starting backup at $(date)"
+    
+    # Create backup directory
+    mkdir -p ${BACKUP_DIR}
+    
+    # Create database dump
+    pg_dump -h ${PGHOST} -p ${PGPORT} -U ${PGUSER} -d ${PGDATABASE} > ${BACKUP_DIR}/${BACKUP_FILE}
+    
+    # Compress backup
+    gzip ${BACKUP_DIR}/${BACKUP_FILE}
+    
+    # Upload to Google Cloud Storage (optional)
+    # gsutil cp ${BACKUP_DIR}/${BACKUP_FILE}.gz gs://your-backup-bucket/
+    
+    # Keep only last 7 days of backups
+    find ${BACKUP_DIR} -name "n8n_backup_*.sql.gz" -mtime +7 -delete
+    
+    echo "Backup completed: ${BACKUP_FILE}.gz"
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  namespace: n8n
+spec:
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: postgres-backup
+            image: postgres:11
+            env:
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_NON_ROOT_USER
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_NON_ROOT_PASSWORD
+            command: ["/bin/bash", "/backup-script/backup.sh"]
+            volumeMounts:
+            - name: backup-script
+              mountPath: /backup-script
+            - name: backup-storage
+              mountPath: /backup
+          volumes:
+          - name: backup-script
+            configMap:
+              name: backup-script
+              defaultMode: 0755
+          - name: backup-storage
+            persistentVolumeClaim:
+              claimName: backup-pvc
+          restartPolicy: OnFailure
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backup-pvc
+  namespace: n8n
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi
+  storageClassName: standard-rwo 
